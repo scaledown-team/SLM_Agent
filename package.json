@@ -1,0 +1,43 @@
+{
+  "name": "@scaledown/migration-agent",
+  "version": "0.1.0",
+  "description": "Evaluate and migrate AI API calls in your codebase to use ScaleDown SLMs for cost reduction",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "scaledown-agent": "dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "dev": "tsx src/index.ts"
+  },
+  "files": [
+    "dist/",
+    "skills/",
+    ".claude-plugin/",
+    ".mcp.json",
+    "README.md"
+  ],
+  "keywords": [
+    "scaledown",
+    "mcp",
+    "model-context-protocol",
+    "ai",
+    "llm",
+    "migration",
+    "cost-reduction",
+    "claude-code",
+    "cursor"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0"
+  }
+}
