@@ -1,0 +1,29 @@
+{
+  "$schema": "https://code.claude.com/schemas/marketplace.json",
+  "name": "scaledown",
+  "displayName": "ScaleDown",
+  "description": "Official ScaleDown plugins for Claude Code. Reduce AI API costs by up to 95% using task-specific SLMs for classification, extraction, summarization, and context compression.",
+  "owner": {
+    "name": "ScaleDown",
+    "email": "soham@scaledown.ai"
+  },
+  "homepage": "https://scaledown.ai",
+  "plugins": [
+    {
+      "name": "slm-agent",
+      "displayName": "SLM Agent",
+      "source": ".",
+      "description": "Scans your codebase for AI API calls and generates a migration plan showing exactly where and how to replace expensive LLM calls with task-specific SLMs — up to 95% cheaper. No data from your codebase is ever sent to ScaleDown servers.",
+      "version": "0.1.0",
+      "author": {
+        "name": "ScaleDown",
+        "email": "soham@scaledown.ai"
+      },
+      "homepage": "https://scaledown.ai",
+      "repository": "https://github.com/scaledown-team/SLM_Agent",
+      "license": "MIT",
+      "keywords": ["scaledown", "slm", "cost-reduction", "ai", "llm", "migration", "openai", "anthropic"],
+      "category": "productivity"
+    }
+  ]
+}

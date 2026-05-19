@@ -4,8 +4,10 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { z } from "zod";
 import { getDetectionPatterns } from "./tools/patterns.js";
 import { getBestTemplate, getTemplates } from "./tools/templates.js";
-import { analyzeSnippet, generateMigrationPlanMarkdown } from "./tools/analyzer.js";
+import { generateMigrationPlanMarkdown } from "./tools/analyzer.js";
 import type { Finding } from "./tools/analyzer.js";
+import { writeFileSync, mkdirSync } from "fs";
+import { join, dirname } from "path";
 import type { OpportunityType } from "./tools/templates.js";
 
 const server = new McpServer({
@@ -62,49 +64,7 @@ Returns patterns for both Python and TypeScript/JavaScript.`,
   }
 );
 
-// ── Tool 2: analyze_code_snippet ─────────────────────────────────────────────
-
-server.tool(
-  "analyze_code_snippet",
-  `Analyzes a code snippet containing an AI API call and identifies ScaleDown
-integration opportunities. Returns a list of opportunities (compression,
-classification, extraction, summarization) with confidence levels and estimated
-cost savings. Use this after finding AI API calls with grep to understand which
-ScaleDown SLM is the best fit for each call site.`,
-  {
-    code: z
-      .string()
-      .describe(
-        "The code snippet to analyze. Include surrounding context (±15 lines) for best results."
-      ),
-    language: z
-      .enum(["python", "typescript", "javascript"])
-      .describe("Programming language of the snippet."),
-    file_path: z
-      .string()
-      .optional()
-      .describe("File path (used for context in the analysis output)."),
-  },
-  async ({ code, language, file_path }) => {
-    const lang = language === "javascript" ? "typescript" : language;
-    const analysis = analyzeSnippet(code, lang as "python" | "typescript");
-
-    return {
-      content: [
-        {
-          type: "text",
-          text: JSON.stringify(
-            { file_path: file_path ?? "unknown", ...analysis },
-            null,
-            2
-          ),
-        },
-      ],
-    };
-  }
-);
-
-// ── Tool 3: get_integration_template ─────────────────────────────────────────
+// ── Tool 2: get_integration_template ─────────────────────────────────────────
 
 server.tool(
   "get_integration_template",
@@ -183,53 +143,120 @@ Opportunity types:
   }
 );
 
-// ── Tool 4: generate_migration_plan ──────────────────────────────────────────
+// ── Tool 3: generate_migration_plan ──────────────────────────────────────────
+
+const findingSchema = z.object({
+  file_path: z.string(),
+  line_number: z.number().optional(),
+  provider: z.string(),
+  opportunities: z.array(
+    z.object({
+      type: z.enum(["compression", "classification", "extraction", "summarization"]),
+      confidence: z.enum(["high", "medium", "low"]),
+      reason: z.string(),
+      estimated_savings: z.string(),
+    })
+  ),
+  complexity: z
+    .object({
+      score: z.number(),
+      label: z.string(),
+      reasons: z.array(z.string()),
+      decomposition: z
+        .array(
+          z.object({
+            step: z.number(),
+            purpose: z.string(),
+            handler: z.enum(["scaledown", "llm"]),
+            slm_type: z
+              .enum(["compression", "classification", "extraction", "summarization"])
+              .optional(),
+            notes: z.string(),
+          })
+        )
+        .optional(),
+    })
+    .optional(),
+  code_snippet: z.string(),
+});
 
 server.tool(
   "generate_migration_plan",
   `Generates a structured markdown migration plan from a list of findings.
 Call this after you have analyzed all AI API call sites in the codebase.
-The plan includes a summary table, per-opportunity sections with file lists,
-action items, and setup instructions.`,
+The plan includes a summary table, complexity breakdown, per-opportunity sections
+with confidence levels, complex call decompositions, and setup instructions.
+The markdown is returned as text — use save_migration_report to persist it to disk.`,
   {
     findings: z
-      .array(
-        z.object({
-          file_path: z.string(),
-          line_number: z.number().optional(),
-          provider: z.string(),
-          opportunities: z.array(
-            z.object({
-              type: z.enum([
-                "compression",
-                "classification",
-                "extraction",
-                "summarization",
-              ]),
-              confidence: z.enum(["high", "medium", "low"]),
-              reason: z.string(),
-              estimated_savings: z.string(),
-            })
-          ),
-          code_snippet: z.string(),
-        })
-      )
-      .describe(
-        "Array of findings from analyze_code_snippet, one per AI API call site."
-      ),
+      .array(findingSchema)
+      .describe("Array of findings assembled by Claude, one per AI API call site."),
     project_name: z
       .string()
       .optional()
       .describe("Name of the project/codebase (used in the plan heading)."),
+    files_scanned: z
+      .number()
+      .optional()
+      .describe("Total number of files scanned (for the summary table)."),
   },
-  async ({ findings, project_name }) => {
+  async ({ findings, project_name, files_scanned }: { findings: Finding[]; project_name?: string; files_scanned?: number }) => {
     const plan = generateMigrationPlanMarkdown(
-      findings as Finding[],
-      project_name
+      findings,
+      project_name,
+      files_scanned ?? 0
     );
     return {
       content: [{ type: "text", text: plan }],
     };
+  }
+);
+
+// ── Tool 4: save_migration_report ─────────────────────────────────────────────
+
+server.tool(
+  "save_migration_report",
+  `Saves the migration report as a markdown file inside the user's project.
+Always call this after generate_migration_plan so the report is persisted.
+The file is written to <project_root>/scaledown-report.md.
+Returns the absolute path of the saved file.`,
+  {
+    markdown: z
+      .string()
+      .describe("The markdown string returned by generate_migration_plan."),
+    project_root: z
+      .string()
+      .describe(
+        "Absolute path to the root of the user's project (the directory being evaluated)."
+      ),
+  },
+  async ({ markdown, project_root }: { markdown: string; project_root: string }) => {
+    const outPath = join(project_root, "scaledown-report.md");
+    try {
+      mkdirSync(dirname(outPath), { recursive: true });
+      writeFileSync(outPath, markdown, "utf8");
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({ saved: true, path: outPath }, null, 2),
+          },
+        ],
+      };
+    } catch (err) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: JSON.stringify({
+              saved: false,
+              error: String(err),
+              path: outPath,
+            }),
+          },
+        ],
+      };
+    }
   }
 );
 

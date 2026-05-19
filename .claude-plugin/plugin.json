@@ -1,10 +1,17 @@
 {
-  "name": "scaledown-migration-agent",
+  "name": "slm-agent",
+  "displayName": "SLM Agent by ScaleDown",
   "version": "0.1.0",
-  "description": "Evaluate and migrate AI API calls in your codebase to use ScaleDown SLMs for cost reduction. Detects OpenAI, Anthropic, LangChain, LlamaIndex, Cohere, and more.",
-  "author": "ScaleDown <hello@scaledown.ai>",
+  "description": "Scans your codebase for AI API calls and generates a migration plan showing exactly where and how to replace expensive LLM calls with task-specific SLMs — up to 95% cheaper. Supports OpenAI, Anthropic, LangChain, LlamaIndex, Cohere, Vercel AI SDK, and more. No data from your codebase is ever sent to ScaleDown servers when running this plugin.",
+  "author": {
+    "name": "ScaleDown",
+    "email": "soham@scaledown.ai"
+  },
   "homepage": "https://scaledown.ai",
   "repository": "https://github.com/scaledown-team/SLM_Agent",
+  "license": "MIT",
+  "keywords": ["scaledown", "slm", "cost-reduction", "ai", "llm", "migration", "openai", "anthropic"],
+  "category": "productivity",
   "skills": [
     "skills/evaluate"
   ],

@@ -1,6 +1,8 @@
-# ScaleDown Migration Agent
+# SLM Agent by ScaleDown
 
 An MCP server + Claude Code plugin that scans your codebase for AI API calls and shows you exactly where and how to integrate [ScaleDown](https://scaledown.ai) SLMs to cut costs by up to 95%.
+
+> **Privacy**: This plugin analyzes your code locally. No source code or codebase data is ever sent to ScaleDown servers. The only network calls are to ScaleDown's API endpoints at runtime, when *your application* calls them with the `SCALEDOWN_API_KEY` you provide.
 
 ## What it does
 
@@ -16,16 +18,17 @@ An MCP server + Claude Code plugin that scans your codebase for AI API calls and
 
 ### Claude Code (recommended)
 
-```bash
-# Install the plugin — auto-configures the MCP server and adds the /scaledown-migration-agent:evaluate skill
-claude plugin install scaledown-migration-agent@scaledown-team
+```
+/plugin install scaledown-team/SLM_Agent
 ```
 
 Then in any project:
 
 ```
-/scaledown-migration-agent:evaluate
+/slm-agent:evaluate
 ```
+
+The plugin automatically configures the MCP server and registers the `/slm-agent:evaluate` skill. No further setup needed.
 
 ### Cursor
 
@@ -34,7 +37,7 @@ Add to your project's `.cursor/mcp.json` (or `~/.cursor/mcp.json` for global):
 ```json
 {
   "mcpServers": {
-    "scaledown-migration-agent": {
+    "scaledown-slm-agent": {
       "command": "npx",
       "args": ["-y", "@scaledown/migration-agent"]
     }
@@ -42,7 +45,7 @@ Add to your project's `.cursor/mcp.json` (or `~/.cursor/mcp.json` for global):
 }
 ```
 
-Then ask Cursor: *"Use the scaledown-migration-agent tools to evaluate this codebase for ScaleDown integration opportunities."*
+Then ask Cursor: *"Use the scaledown-slm-agent tools to evaluate this codebase for ScaleDown integration opportunities."*
 
 ### VS Code (Copilot / any MCP-compatible extension)
 
@@ -51,7 +54,7 @@ Add to your workspace `.vscode/mcp.json`:
 ```json
 {
   "servers": {
-    "scaledown-migration-agent": {
+    "scaledown-slm-agent": {
       "type": "stdio",
       "command": "npx",
       "args": ["-y", "@scaledown/migration-agent"]
@@ -75,9 +78,45 @@ The server exposes four tools that any MCP-compatible AI assistant can call:
 | Tool | Description |
 |---|---|
 | `get_ai_detection_patterns` | Returns grep-compatible regex patterns for all supported AI providers |
-| `analyze_code_snippet` | Classifies a code snippet and returns ScaleDown integration opportunities |
 | `get_integration_template` | Returns before/after code showing exactly how to integrate ScaleDown |
-| `generate_migration_plan` | Generates a full markdown migration plan from a list of findings |
+| `generate_migration_plan` | Generates a full structured markdown migration plan from a list of findings |
+| `save_migration_report` | Writes the migration plan markdown to `scaledown-report.md` in the user's project root |
+
+## Migration report
+
+After evaluation, a file named **`scaledown-report.md`** is saved in your project root. It follows a fixed schema (version `"1"`) and contains:
+
+| Section | Content |
+|---|---|
+| **Summary table** | Files scanned, files with AI calls, total opportunities, providers detected |
+| **Complexity breakdown** | Count of calls at each complexity level (trivial → highly_complex) |
+| **Per-opportunity sections** | Files, line numbers, complexity score, confidence level, and action for each of `sd_classify` / `sd_extract` / `sd_summarize` / `sd_compress` |
+| **Complex call decompositions** | For calls scoring 3+/5, a step-by-step breakdown showing which sub-tasks can move to a ScaleDown SLM and which still need a frontier LLM |
+| **HTTP API reference** | Exact request/response shapes for all four ScaleDown endpoints (`/v1/classify`, `/v1/extract`, `/v1/compress`, `/v1/summarize`) |
+
+The report header looks like:
+
+```markdown
+# ScaleDown Migration Plan — my-app
+
+> Generated: 2025-05-19T10:00:00.000Z
+> Report version: 1
+
+## Summary
+| Metric | Value |
+|---|---|
+| Files scanned | 42 |
+| Files with AI API calls | 7 |
+| Total integration opportunities | 11 |
+| Providers detected | openai, langchain |
+
+### Call Complexity Breakdown
+| Complexity | Count |
+|---|---|
+| simple | 4 |
+| moderate | 2 |
+| complex | 1 |
+```
 
 ## Supported providers
 

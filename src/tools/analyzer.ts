@@ -1,5 +1,7 @@
 import type { OpportunityType } from "./templates.js";
 
+// ── Shared types (filled in by Claude, not by heuristics) ────────────────────
+
 export interface Opportunity {
   type: OpportunityType;
   confidence: "high" | "medium" | "low";
@@ -7,12 +9,28 @@ export interface Opportunity {
   estimated_savings: string;
 }
 
-export interface SnippetAnalysis {
-  provider: string | null;
-  api_call_detected: boolean;
-  opportunities: Opportunity[];
-  has_large_context_risk: boolean;
-  summary: string;
+/**
+ * Complexity score (1–5) assessed by Claude based on full cross-file context.
+ * 1 = trivial single-purpose call; 5 = highly complex multi-step reasoning.
+ */
+export interface ComplexityAnalysis {
+  score: 1 | 2 | 3 | 4 | 5;
+  label: "trivial" | "simple" | "moderate" | "complex" | "highly_complex";
+  reasons: string[];
+  /**
+   * When score >= 3, Claude-suggested decomposition: break the call into
+   * simpler sub-calls where some can be handled by ScaleDown SLMs.
+   */
+  decomposition?: DecompositionStep[];
+}
+
+export interface DecompositionStep {
+  step: number;
+  purpose: string;
+  /** "scaledown" = replace with an SLM; "llm" = still needs a frontier model */
+  handler: "scaledown" | "llm";
+  slm_type?: OpportunityType;
+  notes: string;
 }
 
 export interface Finding {
@@ -20,321 +38,320 @@ export interface Finding {
   line_number?: number;
   provider: string;
   opportunities: Opportunity[];
+  complexity: ComplexityAnalysis;
   code_snippet: string;
 }
 
-// ── Keyword banks ────────────────────────────────────────────────────────────
+// ── Standardised report schema (version "1") ─────────────────────────────────
 
-const CLASSIFICATION_KEYWORDS = [
-  "classif",
-  "categor",
-  "label",
-  "sentiment",
-  "intent",
-  "topic",
-  "spam",
-  "route",
-  "triage",
-  "tag",
-  "bucket",
-];
-
-const EXTRACTION_KEYWORDS = [
-  "extract",
-  "parse",
-  "identify",
-  "find all",
-  "list all",
-  "named entity",
-  "ner",
-  "pull out",
-  "get all",
-  "structured",
-  "json output",
-  "return json",
-  "return as json",
-];
-
-const SUMMARIZATION_KEYWORDS = [
-  "summar",
-  "tldr",
-  "tl;dr",
-  "brief",
-  "overview",
-  "key points",
-  "condense",
-  "shorten",
-  "recap",
-  "digest",
-];
-
-const LARGE_CONTEXT_SIGNALS = [
-  /context\s*[\+\[]/, // context + query or context[...]
-  /retrieved.*doc/i,
-  /documents?\s*[\+\[]/,
-  /chunks?\s*[\+\[]/,
-  /passages?\s*[\+\[]/,
-  /\brag\b/i, // RAG pipeline mention
-  /\bjoin\(.*doc/i, // "\n".join(docs)
-  /\n.*join/i,
-  /f["'].*\{.*context/i, // f-string with context
-  /f["'].*\{.*doc/i, // f-string with doc
-  /template\.format/i,
-  /PromptTemplate/i,
-  /context_window/i,
-  /long.*context/i,
-  /large.*context/i,
-];
-
-// ── Provider detection ────────────────────────────────────────────────────────
-
-const PROVIDER_SIGNALS: Record<string, RegExp[]> = {
-  openai: [
-    /from openai import/i,
-    /import openai/i,
-    /chat\.completions\.create/i,
-    /ChatCompletion\.create/i,
-    /openai\.Completion/i,
-  ],
-  anthropic: [
-    /from anthropic import/i,
-    /import anthropic/i,
-    /messages\.create/i,
-    /Anthropic\(\)/i,
-  ],
-  langchain: [
-    /from langchain/i,
-    /ChatOpenAI/,
-    /ChatAnthropic/,
-    /LLMChain/,
-    /RetrievalQA/,
-  ],
-  llamaindex: [
-    /from llama_index/i,
-    /VectorStoreIndex/,
-    /ServiceContext/,
-    /QueryEngine/,
-  ],
-  cohere: [/import cohere/i, /co\.chat/, /co\.generate/, /co\.classify/],
-  google_genai: [
-    /import google\.generativeai/i,
-    /genai\.GenerativeModel/i,
-    /generate_content/i,
-  ],
-  vercel_ai: [/from ['"]ai['"]/, /generateText/, /streamText/, /generateObject/],
-};
-
-function detectProvider(code: string): string | null {
-  for (const [provider, patterns] of Object.entries(PROVIDER_SIGNALS)) {
-    if (patterns.some((p) => p.test(code))) return provider;
-  }
-  return null;
+export interface ReportFinding {
+  file: string;
+  line: number | null;
+  provider: string;
+  complexity_score: number;
+  complexity_label: string;
+  opportunities: Array<{
+    type: OpportunityType;
+    confidence: "high" | "medium" | "low";
+    estimated_savings: string;
+    reason: string;
+  }>;
+  decomposition: DecompositionStep[] | null;
+  snippet_preview: string;
 }
 
-// ── Main analysis ─────────────────────────────────────────────────────────────
-
-export function analyzeSnippet(
-  code: string,
-  language: "python" | "typescript" | "javascript"
-): SnippetAnalysis {
-  const codeLower = code.toLowerCase();
-  const opportunities: Opportunity[] = [];
-
-  const provider = detectProvider(code);
-  const hasLargeContext = LARGE_CONTEXT_SIGNALS.some((p) => p.test(code));
-
-  // Classification replacement opportunity
-  if (CLASSIFICATION_KEYWORDS.some((kw) => codeLower.includes(kw))) {
-    opportunities.push({
-      type: "classification",
-      confidence: "high",
-      reason:
-        "Code uses a frontier LLM for text classification. ScaleDown's sd_classify SLM handles this at a fraction of the cost.",
-      estimated_savings: "~95% cost reduction vs. GPT-4o per call",
-    });
-  }
-
-  // Extraction replacement opportunity
-  if (EXTRACTION_KEYWORDS.some((kw) => codeLower.includes(kw))) {
-    opportunities.push({
-      type: "extraction",
-      confidence: "high",
-      reason:
-        "Code uses a frontier LLM for structured data / entity extraction. ScaleDown's sd_extract handles this without an LLM.",
-      estimated_savings: "~95% cost reduction vs. GPT-4o per call",
-    });
-  }
-
-  // Summarization replacement opportunity
-  if (SUMMARIZATION_KEYWORDS.some((kw) => codeLower.includes(kw))) {
-    opportunities.push({
-      type: "summarization",
-      confidence: "medium",
-      reason:
-        "Code uses a frontier LLM for summarization. ScaleDown's sd_summarize can handle this at a lower cost.",
-      estimated_savings: "~90% cost reduction vs. GPT-4o per call",
-    });
-  }
-
-  // Compression opportunity (large context passed to LLM)
-  if (hasLargeContext) {
-    opportunities.push({
-      type: "compression",
-      confidence: "medium",
-      reason:
-        "Code passes large or variable-length context to an LLM. Compressing with sd_compress before the call reduces tokens 50-70%.",
-      estimated_savings: "50-70% token reduction on context portion of call",
-    });
-  }
-
-  // If no structural signals but we see an LLM API call, suggest compression as general advice
-  if (opportunities.length === 0 && provider !== null) {
-    opportunities.push({
-      type: "compression",
-      confidence: "low",
-      reason:
-        "LLM API call detected. If this call receives large user inputs or retrieved context, sd_compress can reduce token costs 50-70%.",
-      estimated_savings: "50-70% on context tokens (if applicable)",
-    });
-  }
-
-  const summary =
-    opportunities.length > 0
-      ? `Found ${opportunities.length} ScaleDown opportunity(ies): ${opportunities.map((o) => o.type).join(", ")}.`
-      : "No clear ScaleDown integration opportunity detected in this snippet.";
-
-  return {
-    provider,
-    api_call_detected: provider !== null,
-    opportunities,
-    has_large_context_risk: hasLargeContext,
-    summary,
+export interface MigrationReport {
+  version: "1";
+  generated_at: string;
+  project_name: string;
+  summary: {
+    files_scanned: number;
+    files_with_ai_calls: number;
+    total_opportunities: number;
+    providers_detected: string[];
+    complexity_breakdown: Record<string, number>;
+  };
+  findings: ReportFinding[];
+  api: {
+    base_url: string;
+    auth: string;
+    docs_url: string;
   };
 }
 
-// ── Migration plan generation ─────────────────────────────────────────────────
+// ── Report builder ────────────────────────────────────────────────────────────
+
+export function buildReport(
+  findings: Finding[],
+  projectName: string = "your project",
+  filesScanned: number = 0
+): MigrationReport {
+  const complexityBreakdown: Record<string, number> = {};
+  for (const f of findings) {
+    const label = f.complexity?.label ?? "unknown";
+    complexityBreakdown[label] = (complexityBreakdown[label] ?? 0) + 1;
+  }
+
+  return {
+    version: "1",
+    generated_at: new Date().toISOString(),
+    project_name: projectName,
+    summary: {
+      files_scanned: filesScanned,
+      files_with_ai_calls: new Set(findings.map((f) => f.file_path)).size,
+      total_opportunities: findings.reduce(
+        (n, f) => n + f.opportunities.length,
+        0
+      ),
+      providers_detected: [
+        ...new Set(findings.map((f) => f.provider).filter(Boolean)),
+      ],
+      complexity_breakdown: complexityBreakdown,
+    },
+    findings: findings.map((f) => ({
+      file: f.file_path,
+      line: f.line_number ?? null,
+      provider: f.provider,
+      complexity_score: f.complexity?.score ?? 1,
+      complexity_label: f.complexity?.label ?? "trivial",
+      opportunities: f.opportunities.map((o) => ({
+        type: o.type,
+        confidence: o.confidence,
+        estimated_savings: o.estimated_savings,
+        reason: o.reason,
+      })),
+      decomposition: f.complexity?.decomposition ?? null,
+      snippet_preview: f.code_snippet.split("\n").slice(0, 3).join("\n"),
+    })),
+    api: {
+      base_url: "https://api.scaledown.ai/v1",
+      auth: "Authorization: Bearer $SCALEDOWN_API_KEY",
+      docs_url: "https://scaledown.ai/docs",
+    },
+  };
+}
+
+// ── Migration plan markdown ───────────────────────────────────────────────────
+
+const ORDER: OpportunityType[] = [
+  "classification",
+  "extraction",
+  "summarization",
+  "compression",
+];
+const TITLES: Record<OpportunityType, string> = {
+  classification: "Replace Classification Calls with `sd_classify`",
+  extraction: "Replace Extraction Calls with `sd_extract`",
+  summarization: "Replace Summarization Calls with `sd_summarize`",
+  compression: "Add Context Compression with `sd_compress`",
+};
+const SAVINGS: Record<OpportunityType, string> = {
+  classification: "~95% per call",
+  extraction: "~95% per call",
+  summarization: "~90% per call",
+  compression: "50–70% on context tokens",
+};
+const ACTIONS: Record<OpportunityType, string> = {
+  classification:
+    "Replace the frontier LLM call with a POST to `/v1/classify`.",
+  extraction:
+    "Replace the frontier LLM call with a POST to `/v1/extract`.",
+  summarization:
+    "Replace the frontier LLM call with a POST to `/v1/summarize`. **Note:** `sd_summarize` is currently in private preview — contact ScaleDown to enable.",
+  compression:
+    "Before the LLM call, POST the context to `/v1/compress` and pass `compressed_prompt` from the response to the LLM.",
+};
+
+function slmName(type: OpportunityType): string {
+  const map: Record<OpportunityType, string> = {
+    compression: "sd_compress → POST /v1/compress",
+    classification: "sd_classify → POST /v1/classify",
+    extraction: "sd_extract → POST /v1/extract",
+    summarization: "sd_summarize → POST /v1/summarize",
+  };
+  return map[type];
+}
 
 export function generateMigrationPlanMarkdown(
   findings: Finding[],
-  projectName: string = "your project"
+  projectName: string = "your project",
+  filesScanned: number = 0
 ): string {
+  const report = buildReport(findings, projectName, filesScanned);
+
   if (findings.length === 0) {
-    return `# ScaleDown Migration Plan\n\nNo AI API calls were found in ${projectName}.\n`;
+    return `# ScaleDown Migration Plan — ${projectName}\n\nNo AI API calls were found.\n\n---\n*Generated by ScaleDown Migration Agent at ${report.generated_at}*\n`;
   }
 
-  // Aggregate savings by type
+  // Group findings by opportunity type (deduplicated per finding)
   const byType: Record<string, Finding[]> = {};
   for (const f of findings) {
     for (const o of f.opportunities) {
       if (!byType[o.type]) byType[o.type] = [];
-      byType[o.type].push(f);
+      if (!byType[o.type].includes(f)) byType[o.type].push(f);
     }
   }
 
-  const uniqueFiles = new Set(findings.map((f) => f.file_path)).size;
-  const totalOpportunities = findings.reduce(
-    (n, f) => n + f.opportunities.length,
-    0
-  );
+  const { summary } = report;
+  const complexRows = Object.entries(summary.complexity_breakdown)
+    .map(([label, count]) => `| ${label} | ${count} |`)
+    .join("\n");
 
   let md = `# ScaleDown Migration Plan — ${projectName}
+
+> Generated: ${report.generated_at}
+> Report version: ${report.version}
 
 ## Summary
 
 | Metric | Value |
 |---|---|
-| Files with AI API calls | ${uniqueFiles} |
-| Total integration opportunities | ${totalOpportunities} |
-| Providers detected | ${[...new Set(findings.map((f) => f.provider))].join(", ")} |
+| Files scanned | ${summary.files_scanned} |
+| Files with AI API calls | ${summary.files_with_ai_calls} |
+| Total integration opportunities | ${summary.total_opportunities} |
+| Providers detected | ${summary.providers_detected.join(", ")} |
+
+### Call Complexity Breakdown
+
+| Complexity | Count |
+|---|---|
+${complexRows}
 
 `;
 
-  if (byType["classification"]) {
-    md += `## 1. Replace Classification Calls with \`sd_classify\`
+  let sectionNum = 1;
+  for (const type of ORDER) {
+    if (!byType[type]) continue;
+    md += `## ${sectionNum++}. ${TITLES[type]}
 
-**Estimated savings: ~95% per call**
+**Estimated savings: ${SAVINGS[type]}**
 
-These files use a frontier LLM (e.g. GPT-4o) purely for text classification.
-ScaleDown's task-specific SLM handles classification at a fraction of the cost and with lower latency.
+| File | Line | Complexity | Confidence |
+|---|---|---|---|
+${byType[type]
+  .map((f) => {
+    const opp = f.opportunities.find((o) => o.type === type)!;
+    return `| \`${f.file_path}\` | ${f.line_number ?? "?"} | ${f.complexity?.label ?? "?"} (${f.complexity?.score ?? "?"}/5) | ${opp.confidence} |`;
+  })
+  .join("\n")}
 
-| File | Line |
-|---|---|
-${byType["classification"].map((f) => `| \`${f.file_path}\` | ${f.line_number ?? "?"} |`).join("\n")}
-
-**Action:** For each file, replace the LLM \`messages.create\` / \`chat.completions.create\` call with \`sd.classify(...)\`.
+**Action:** ${ACTIONS[type]}
 
 `;
   }
 
-  if (byType["extraction"]) {
-    md += `## ${Object.keys(byType).indexOf("extraction") + 1}. Replace Extraction Calls with \`sd_extract\`
+  // Complex call decompositions
+  const complexFindings = findings.filter(
+    (f) => (f.complexity?.score ?? 0) >= 3 && f.complexity?.decomposition?.length
+  );
+  if (complexFindings.length > 0) {
+    md += `## ${sectionNum++}. Complex Call Decompositions
 
-**Estimated savings: ~95% per call**
-
-These files use a frontier LLM purely for structured data or entity extraction.
-ScaleDown's \`sd_extract\` SLM handles this without calling a frontier model.
-
-| File | Line |
-|---|---|
-${byType["extraction"].map((f) => `| \`${f.file_path}\` | ${f.line_number ?? "?"} |`).join("\n")}
-
-**Action:** For each file, replace the LLM call with \`sd.extract(text=..., entities={...})\`.
+The following calls handle multiple tasks in a single LLM prompt.
+Breaking them into focused sub-calls reduces cost and improves reliability.
 
 `;
-  }
+    for (const f of complexFindings) {
+      md += `### \`${f.file_path}\`${f.line_number ? ` (line ${f.line_number})` : ""}
 
-  if (byType["summarization"]) {
-    md += `## ${Object.keys(byType).indexOf("summarization") + 1}. Replace Summarization Calls with \`sd_summarize\`
+**Complexity:** ${f.complexity.label} (${f.complexity.score}/5)
+**Reasons:** ${f.complexity.reasons.join("; ")}
 
-**Estimated savings: ~90% per call**
-
-| File | Line |
-|---|---|
-${byType["summarization"].map((f) => `| \`${f.file_path}\` | ${f.line_number ?? "?"} |`).join("\n")}
-
-**Action:** For each file, replace the LLM summarization call with \`sd.summarize(text=...)\`.
-> Note: \`sd_summarize\` is currently in private preview. Contact ScaleDown to enable.
-
-`;
-  }
-
-  if (byType["compression"]) {
-    md += `## ${Object.keys(byType).indexOf("compression") + 1}. Add Context Compression with \`sd_compress\`
-
-**Estimated savings: 50-70% on context tokens**
-
-These files pass large or variable-length context to an LLM (e.g. RAG results, documents).
-Inserting \`sd.compress(context=..., prompt=...)\` before the LLM call reduces token costs significantly.
-
-| File | Line |
-|---|---|
-${byType["compression"].map((f) => `| \`${f.file_path}\` | ${f.line_number ?? "?"} |`).join("\n")}
-
-**Action:** For each file, wrap the context with \`sd.compress(...)\` and pass \`compressed.compressed_prompt\` to the LLM.
+| Step | Purpose | Handler | Notes |
+|---|---|---|---|
+${f.complexity
+  .decomposition!.map(
+    (d) =>
+      `| ${d.step} | ${d.purpose} | ${
+        d.handler === "scaledown"
+          ? `ScaleDown \`${slmName(d.slm_type!)}\``
+          : "Frontier LLM"
+      } | ${d.notes} |`
+  )
+  .join("\n")}
 
 `;
+    }
   }
 
-  md += `## Setup
+  md += `## ScaleDown HTTP API
 
-### Python
+All ScaleDown SLMs are called via REST. No SDK required.
 
-\`\`\`bash
-pip install scaledown
-export SCALEDOWN_API_KEY=your_key_here
+**Base URL:** \`https://api.scaledown.ai/v1\`
+**Auth:** \`Authorization: Bearer $SCALEDOWN_API_KEY\`
+**Docs:** https://scaledown.ai/docs
+
+### sd_classify
+
+\`\`\`http
+POST /v1/classify
+Content-Type: application/json
+Authorization: Bearer $SCALEDOWN_API_KEY
+
+{
+  "text": "<input text>",
+  "labels": [
+    { "name": "billing",   "rubric": "Does this describe a billing issue?" },
+    { "name": "technical", "rubric": "Does this describe a technical issue?" }
+  ]
+}
 \`\`\`
 
-### TypeScript / JavaScript
+Response: \`{ "top_label": "billing", "scores": { "billing": 0.91, "technical": 0.09 } }\`
 
-\`\`\`bash
-npm install @scaledown/sdk
-export SCALEDOWN_API_KEY=your_key_here
+### sd_extract
+
+\`\`\`http
+POST /v1/extract
+Content-Type: application/json
+Authorization: Bearer $SCALEDOWN_API_KEY
+
+{
+  "text": "<input text>",
+  "entities": {
+    "Name":  "Full name of a person",
+    "Email": "Email address"
+  }
+}
 \`\`\`
+
+Response: \`[{ "text": "Alice", "type": "Name", "confidence": 0.98, "start": 0, "end": 5 }, ...]\`
+
+### sd_compress
+
+\`\`\`http
+POST /v1/compress
+Content-Type: application/json
+Authorization: Bearer $SCALEDOWN_API_KEY
+
+{
+  "context": "<retrieved documents or long background text>",
+  "prompt":  "<user query or instruction>"
+}
+\`\`\`
+
+Response: \`{ "compressed_prompt": "...", "successful": true, "original_prompt_tokens": 4200, "compressed_prompt_tokens": 1400 }\`
+
+### sd_summarize *(private preview)*
+
+\`\`\`http
+POST /v1/summarize
+Content-Type: application/json
+Authorization: Bearer $SCALEDOWN_API_KEY
+
+{
+  "text": "<document to summarize>",
+  "instructions": "Be concise."
+}
+\`\`\`
+
+Response: \`{ "summary": "..." }\`
 
 Get a free API key (50M tokens free) at: https://scaledown.ai/dashboard
 
 ---
-*Generated by ScaleDown Migration Agent*
+*Generated by ScaleDown Migration Agent v${report.version} at ${report.generated_at}*
 `;
 
   return md;
