@@ -1,0 +1,12 @@
+{
+  "name": "scaledown-migration-agent",
+  "version": "0.1.0",
+  "description": "Evaluate and migrate AI API calls in your codebase to use ScaleDown SLMs for cost reduction. Detects OpenAI, Anthropic, LangChain, LlamaIndex, Cohere, and more.",
+  "author": "ScaleDown <hello@scaledown.ai>",
+  "homepage": "https://scaledown.ai",
+  "repository": "https://github.com/scaledown-team/SLM_Agent",
+  "skills": [
+    "skills/evaluate"
+  ],
+  "mcp": ".mcp.json"
+}
