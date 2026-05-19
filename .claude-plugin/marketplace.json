@@ -15,13 +15,14 @@
       "source": {
         "source": "url",
         "url": "https://github.com/scaledown-team/SLM_Agent.git",
-        "sha": "e6a1a861fd6a8605cddea31b22ffd4fc5c915558"
+        "ref": "main"
+        // "sha": "e6a1a861fd6a8605cddea31b22ffd4fc5c915558"
       },
       "skills": [
-        "skills/evaluate"
+        "./skills/evaluate"
       ],
       "description": "Scans your codebase for AI API calls and generates a migration plan showing exactly where and how to replace expensive LLM calls with task-specific SLMs — up to 95% cheaper. No data from your codebase is ever sent to ScaleDown servers.",
-      "version": "0.1.4",
+      "version": "0.1.5",
       "author": {
         "name": "ScaleDown",
         "email": "soham@scaledown.ai"
