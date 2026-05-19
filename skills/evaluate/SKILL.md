@@ -167,38 +167,39 @@ Construct one `Finding` object per call site:
 
 ## Phase 4 — Plan generation
 
-1. Call `generate_migration_plan` with:
+1. Run `pwd` with Bash to get the absolute path of the current working directory.
+   Store this as `project_root` — you will need it in step 3.
+
+2. Call `generate_migration_plan` with:
    - `findings`: the complete array from Phase 3
-   - `project_name`: the current directory name
+   - `project_name`: the basename of `project_root`
    - `files_scanned`: total number of Python + TS/JS files found in Phase 1
 
-2. Display the returned markdown to the user.
+3. Immediately call `save_migration_report` with:
+   - `markdown`: the exact string returned by `generate_migration_plan`
+   - `project_root`: the absolute path from step 1
+   **Do this before printing anything to the user.**
 
-3. Call `save_migration_report` with:
-   - `markdown`: the string returned by `generate_migration_plan`
-   - `project_root`: absolute path to the current working directory
-
-4. Confirm: "Report saved to `scaledown-report.md` in your project root."
+4. Confirm to the user: "Report saved to `scaledown-report.md`."
+   Then print a short human-readable summary (not the full markdown):
+   - Files scanned and how many had AI calls
+   - Total opportunities found, broken down by type
+   - List of high-impact quick wins (file + one-line reason)
 
 ---
 
 ## Phase 5 — Decomposition review (complex calls only)
 
 For any finding where `complexity.score >= 3` and `decomposition` is present,
-present the breakdown to the user:
+describe it conversationally — no tables, no blockquotes, no code blocks.
 
-> "`src/pipeline.py` line 88 is a **complex** call doing: <reasons>.
->
-> Suggested decomposition:
-> | Step | Purpose | Handler |
-> |---|---|---|
-> | 0 | context compression | ScaleDown `POST /v1/compress` |
-> | 1 | classification | ScaleDown `POST /v1/classify` |
-> | 2 | answer generation | Frontier LLM |
->
-> Would you like me to split this into these steps?"
+Example tone:
+"src/pipeline.py line 88 is a moderate call doing two things: checking whether
+context is relevant, then generating an answer. I'd suggest splitting it into a
+ScaleDown compress step first, then a classify step to check relevance, and
+finally the LLM call only if context passes. Want me to apply that?"
 
-Only proceed if the user says yes.
+Keep it brief — one short paragraph per complex finding. Only proceed if the user says yes.
 
 ---
 

@@ -1,6 +1,6 @@
 {
   "name": "@scaledown/migration-agent",
-  "version": "0.1.0",
+  "version": "0.1.6",
   "description": "Evaluate and migrate AI API calls in your codebase to use ScaleDown SLMs for cost reduction",
   "type": "module",
   "main": "dist/index.js",

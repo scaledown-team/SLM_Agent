@@ -1,7 +1,7 @@
 {
   "name": "slm-agent",
   "displayName": "SLM Agent by ScaleDown",
-  "version": "0.1.3",
+  "version": "0.1.6",
   "description": "Scans your codebase for AI API calls and generates a migration plan showing exactly where and how to replace expensive LLM calls with task-specific SLMs — up to 95% cheaper. Supports OpenAI, Anthropic, LangChain, LlamaIndex, Cohere, Vercel AI SDK, and more. No data from your codebase is ever sent to ScaleDown servers when running this plugin.",
   "author": {
     "name": "ScaleDown",
