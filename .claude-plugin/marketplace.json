@@ -15,7 +15,7 @@
       "source": {
         "source": "url",
         "url": "https://github.com/scaledown-team/SLM_Agent.git",
-        "ref": "main"
+        "sha": "e6a1a861fd6a8605cddea31b22ffd4fc5c915558"
       },
       "skills": [
         "skills/evaluate"
