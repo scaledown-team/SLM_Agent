@@ -19,13 +19,13 @@ An MCP server + Claude Code plugin that scans your codebase for AI API calls and
 ### Claude Code (recommended)
 
 ```
-/plugin install scaledown-team/SLM_Agent
+/plugin install slm-agent@scaledown
 ```
 
 Then in any project:
 
 ```
-/slm-agent:evaluate
+/evaluate
 ```
 
 The plugin automatically configures the MCP server and registers the `/slm-agent:evaluate` skill. No further setup needed.
