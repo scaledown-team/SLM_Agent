@@ -18,11 +18,23 @@ An MCP server + Claude Code plugin that scans your codebase for AI API calls and
 
 ### Claude Code (recommended)
 
+First add the ScaleDown marketplace:
+
+```
+/plugin marketplace add scaledown-team/SLM_Agent
+```
+
+Then install the plugin:
 ```
 /plugin install slm-agent@scaledown
 ```
 
-Then in any project:
+Finally, reload your plugins:
+```
+/reload-plugins
+```
+
+You are now ready to use the SLM Agent. Go to any project and run:
 
 ```
 /evaluate
