@@ -159,8 +159,8 @@ const findingSchema = z.object({
   ),
   complexity: z
     .object({
-      score: z.number(),
-      label: z.string(),
+      score: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
+      label: z.enum(["trivial", "simple", "moderate", "complex", "highly_complex"]),
       reasons: z.array(z.string()),
       decomposition: z
         .array(
@@ -200,9 +200,9 @@ The markdown is returned as text — use save_migration_report to persist it to 
       .optional()
       .describe("Total number of files scanned (for the summary table)."),
   },
-  async ({ findings, project_name, files_scanned }: { findings: Finding[]; project_name?: string; files_scanned?: number }) => {
+  async ({ findings, project_name, files_scanned }) => {
     const plan = generateMigrationPlanMarkdown(
-      findings,
+      findings as Finding[],
       project_name,
       files_scanned ?? 0
     );
@@ -230,7 +230,7 @@ Returns the absolute path of the saved file.`,
         "Absolute path to the root of the user's project (the directory being evaluated)."
       ),
   },
-  async ({ markdown, project_root }: { markdown: string; project_root: string }) => {
+  async ({ markdown, project_root }) => {
     const outPath = join(project_root, "scaledown-report.md");
     try {
       mkdirSync(dirname(outPath), { recursive: true });
