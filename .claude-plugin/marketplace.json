@@ -18,9 +18,10 @@
         "ref": "main"
       },
       "skills": [
-        "./skills/evaluate"
+        "./skills/evaluate",
+        "./skills/optimize"
       ],
-      "description": "Scans your codebase for AI API calls and generates a migration plan showing exactly where and how to replace expensive LLM calls with task-specific SLMs — up to 95% cheaper. No data from your codebase is ever sent to ScaleDown servers.",
+      "description": "Scans your codebase for AI API calls and generates a migration plan showing exactly where and how to replace expensive LLM calls with task-specific SLMs — up to 95% cheaper, then optimizes your ScaleDown prompts against your own data. No data from your codebase is ever sent to ScaleDown servers.",
       "version": "0.1.6",
       "author": {
         "name": "ScaleDown",

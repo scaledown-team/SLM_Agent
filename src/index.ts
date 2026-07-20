@@ -5,7 +5,7 @@ import { z } from "zod";
 import { getDetectionPatterns } from "./tools/patterns.js";
 import { getBestTemplate, getTemplates } from "./tools/templates.js";
 import { generateMigrationPlanMarkdown } from "./tools/analyzer.js";
-import type { Finding } from "./tools/analyzer.js";
+import type { Finding, ArchitectureOverview } from "./tools/analyzer.js";
 import { writeFileSync, mkdirSync } from "fs";
 import { join, dirname } from "path";
 import type { OpportunityType } from "./tools/templates.js";
@@ -175,17 +175,28 @@ const findingSchema = z.object({
           })
         )
         .optional(),
-    })
-    .optional(),
+    }),
   code_snippet: z.string(),
+});
+
+const architectureOverviewSchema = z.object({
+  description: z.string().describe("Plain-English summary of how and where AI is used in the system."),
+  patterns: z.array(
+    z.object({
+      name: z.string().describe("Short name for this usage pattern (e.g. 'RAG pipeline', 'ticket routing')."),
+      files: z.array(z.string()).describe("Files involved in this pattern."),
+      provider: z.string().describe("AI provider used (e.g. 'openai', 'anthropic')."),
+      purpose: z.string().describe("What this pattern does."),
+    })
+  ).describe("Each distinct AI usage pattern found in the codebase."),
 });
 
 server.tool(
   "generate_migration_plan",
   `Generates a structured markdown migration plan from a list of findings.
 Call this after you have analyzed all AI API call sites in the codebase.
-The plan includes a summary table, complexity breakdown, per-opportunity sections
-with confidence levels, complex call decompositions, and setup instructions.
+The plan includes an architecture overview, summary table, complexity breakdown,
+per-opportunity sections with confidence levels, complex call decompositions, and setup instructions.
 The markdown is returned as text — use save_migration_report to persist it to disk.`,
   {
     findings: z
@@ -199,12 +210,16 @@ The markdown is returned as text — use save_migration_report to persist it to 
       .number()
       .optional()
       .describe("Total number of files scanned (for the summary table)."),
+    architecture_overview: architectureOverviewSchema
+      .optional()
+      .describe("Overview of how the project currently uses AI — populated from Phase 2 analysis."),
   },
-  async ({ findings, project_name, files_scanned }: { findings: Finding[]; project_name?: string; files_scanned?: number }) => {
+  async ({ findings, project_name, files_scanned, architecture_overview }: { findings: Finding[]; project_name?: string; files_scanned?: number; architecture_overview?: ArchitectureOverview }) => {
     const plan = generateMigrationPlanMarkdown(
       findings,
       project_name,
-      files_scanned ?? 0
+      files_scanned ?? 0,
+      architecture_overview
     );
     return {
       content: [{ type: "text", text: plan }],
