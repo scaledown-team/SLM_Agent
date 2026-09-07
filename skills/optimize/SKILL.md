@@ -5,9 +5,12 @@ description: >
   or compress) and benchmark it against a baseline — the frontier-model output it
   replaced, or your ground truth — on the user's own data. Collects sample data
   and a ScaleDown API key; if the user has no samples, walks them through creating
-  and validating a small labeled set first. Then runs repeatable evals with a
-  metric appropriate to the task type, quantifies run-to-run noise, and iterates
-  the prompt until it beats — or matches within noise — the baseline. General by
+  and validating a small labeled set first. Clusters the errors (with FP/FN
+  splits and ambiguous-ground-truth flagged separately) and lets the user choose
+  what to prioritize, then iterates on that targeted subset plus a small control
+  sample of good cases — instead of the full dataset every round — so large
+  datasets tune fast. Reports round-by-round progress as it happens, and reserves
+  one full-dataset, noise-quantified run for the final confirmation. General by
   design: adapts to any use case, with task-specific playbooks.
 allowed-tools:
   - Bash
@@ -53,18 +56,29 @@ Whatever the task, optimization is the same loop:
 2. **Pick the right metric for the task type.** A single accuracy number is
    usually misleading. Choose a metric that can't be gamed by a degenerate
    strategy (see "Metrics by task type" below).
-3. **Measure the noise floor.** The API is non-deterministic; two runs of the
-   *same* prompt differ. Run baseline and candidate **twice each, in one batch**,
-   and treat any delta smaller than the observed run-to-run spread as a tie.
-4. **Iterate with single, scoped changes.** Diagnose the largest error cluster
-   from real mismatched samples, make one contained change aimed at it, and
-   re-measure fairly.
+3. **Cluster the errors and ask the user what to prioritize.** Don't chase the
+   biggest cluster automatically — name the failure clusters (with FP/FN split
+   where relevant), flag likely-ambiguous ground truth separately, and let the
+   user choose what this round should target.
+4. **Iterate on a short, targeted set — not the full dataset every round.**
+   Diagnose the selected cluster from real mismatched samples, make one
+   contained change aimed at it, and re-measure on that cluster plus a small
+   stratified sample of previously-good cases. This is what keeps rounds fast
+   on large datasets.
 5. **Guard against regressions you didn't look for.** A change that helps the
    thing you targeted can quietly hurt something else (another field, another
-   class, another length regime). Always score the *whole* task, compare the
-   *aggregate*, and revert if the aggregate drops.
-6. **Accept "no change needed."** If the SLM is already within noise of the
-   baseline, say so. That is a real, honest result — don't manufacture an edit.
+   class, another length regime). The stratified good-case sample each round is
+   the cheap check for this; revert if it regresses.
+6. **Confirm on the full dataset only once, at the end.** Measure the noise
+   floor (the API is non-deterministic — two runs of the same prompt differ) and
+   the real aggregate numbers by running the final candidate and v1 twice each,
+   full dataset, in one batch — not every intermediate version.
+7. **Make progress visible.** Log and report each round as it finishes — cluster
+   targeted, metric before/after, control result, verdict — so the loop isn't a
+   black box.
+8. **Accept "no change needed."** If the SLM is already within noise of the
+   baseline, or already meets the user's bar, say so and offer to stop. That is
+   a real, honest result — don't manufacture an edit or iterate by default.
 
 ### Metrics by task type
 
@@ -200,6 +214,20 @@ Write a self-contained, re-runnable `scaledown-eval/run_eval.py`. It must:
     downstream answer correctness.
 - Support `--limit N`, `--concurrency N`, and `--json-out <path>` (machine-readable
   metrics so rounds can be diffed programmatically).
+- Support `--ids <file.txt|comma-list>` (or `--sample-ids`) to run only a
+  specified subset of sample IDs — this is what lets Phase 5 evaluate just a
+  failure cluster plus a stratified control sample instead of the whole file.
+  When a subset is used, the metrics output must say so (e.g. `"subset":
+  {"ids_file": ..., "n": ...}`) so a subset result is never mistaken for a
+  full-dataset one.
+- Support `--compare-tags <name>` so two eval runs (candidate vs current best,
+  or final vs v1) can be labeled and diffed by round/version name in
+  `--json-out`, keeping the round log in Phase 5 mechanical rather than manual
+  bookkeeping.
+- Print a one-line progress summary **per sample as it completes** (id,
+  pass/fail against baseline) when running interactively, not just a final
+  aggregate — this is what gives the user visibility into a running round
+  instead of a silent wait.
 - Use only the Python stdlib plus `httpx`, **falling back to `urllib`** if `httpx`
   is absent so the user installs nothing.
 
@@ -210,55 +238,122 @@ output, and fix the request/response shape before continuing.
 
 ## Phase 4 — Baseline round & noise floor
 
-1. Run `prompt_v1.json` over **all** samples **twice** in one batch; save
-   `metrics_v1_a.json` / `_b.json`.
-2. Report v1's primary metric (per class / per field as appropriate) and the
-   run-to-run spread (|a − b|). State the noise floor explicitly: "deltas under
-   ~X points are noise."
-3. v1 is the bar every later prompt must clear by **more than the noise floor**,
-   on the **aggregate** metric, not on one class/field.
+1. Run `prompt_v1.json` over **all** samples **once**; save `metrics_v1.json`.
+   (The second confirmation run happens later, only for whichever prompt is still
+   the leading candidate when the loop ends — see Phase 6. Don't pay for two full
+   passes on every intermediate version; that cost is what makes the loop slow on
+   large datasets.)
+2. Report v1's primary metric (per class / per field as appropriate).
+3. v1 is the bar every later prompt must clear, checked first on the cheap
+   subset evals in Phase 5, and confirmed for real in Phase 6.
+
+---
+
+## Phase 4.5 — Failure triage (cluster errors, let the user pick what to fix)
+
+Goal: turn the raw miss list into a small set of named clusters, and put the
+prioritization decision in the user's hands instead of always chasing the
+biggest cluster automatically. This is the step that replaces "tweak the whole
+prompt against the whole dataset" with a targeted, faster loop, and it's also
+where ambiguous ground truth gets caught before it wastes a tuning round.
+
+1. **Pull every mismatched sample** from `metrics_v1.json`: input, our output,
+   baseline/ground-truth output.
+2. **Cluster them** into named groups by shared failure pattern — e.g. for
+   classify: specific confused-label pairs, and split each into **false
+   positives vs false negatives** (which direction matters can differ by class —
+   don't assume FP and FN are equally bad); for extract: per-field patterns
+   (field always empty when it shouldn't be, wrong value shape, wrong entity
+   picked); for summarize: dropped-fact vs length vs hallucination clusters; for
+   compress: which downstream questions stopped being answerable.
+3. **Flag likely-ambiguous ground truth separately** — samples where the
+   baseline/ground-truth label looks inconsistent with very similar samples
+   elsewhere in the set (contradicts a near-duplicate input, or sits on a
+   judgment call with no clear rule). Don't cluster these with real model
+   errors and don't silently pick a side. List them as their own group.
+4. **Present the clusters to the user** as a short table: name, size, one
+   example, and (for classify) FP/FN split. For the ambiguous-ground-truth
+   group, ask the user to resolve the actual intended label/rule for a few
+   representative examples — that answer gets encoded into the prompt in Phase
+   5 like any other fix, and prevents chasing a fix for a "miss" that was never
+   wrong. Then **ask which cluster(s) to prioritize this round** — don't assume
+   "biggest cluster" or "everything." The user may have an asymmetric cost (e.g.
+   FNs cheaper than FPs) that only they know.
+5. Re-run this triage at the *start of every iteration round* in Phase 5, not
+   just once — after a cluster is fixed, the remaining error mix changes and
+   priorities may shift.
 
 ---
 
 ## Phase 5 — Iterate the prompt
 
-Repeat until the prompt beats v1 beyond noise, or the user stops:
+Repeat until the prompt beats v1 beyond noise on the clusters the user cares
+about, or the user stops:
 
-1. **Diagnose from real samples.** Find the largest error cluster in the latest
-   metrics (the worst-F1 class; the field with the biggest recall gap; the
-   summaries dropping a key fact). Pull the actual mismatched samples — input, our
-   output, baseline — and read them. Name the failure pattern in plain English.
-   *Every prompt change must be grounded in observed samples, not a guess.*
-2. **Change one thing, scoped.** Copy the current best to `prompt_vN.json` and make
-   a single contained edit aimed at that cluster. Beware spillover: broad language
-   added for one class/field can shift behavior on others (in extract, several
-   fields share one call; in classify, redefining one label reshapes the boundary
-   with its neighbors).
-3. **Eval fairly.** Run the new version **and** re-run the current best in the
-   **same batch**, each **twice**, over all samples. Compare on the aggregate
-   metric; sub-noise deltas are ties.
-4. **Score the whole task.** If the targeted cluster improved but the aggregate
-   dropped (another class/field regressed), it's a **regression** — revert.
-5. **Log the round** in `scaledown-eval/rounds.md`: version, the one change, the
-   per-class/per-field metric, the aggregate, and the verdict (win/noise/regress).
+1. **Diagnose the user-selected cluster(s) from Phase 4.5.** Read the actual
+   mismatched samples in that cluster — input, our output, baseline — and name
+   the failure pattern in plain English. *Every prompt change must be grounded
+   in observed samples, not a guess.* If a cluster is the ambiguous-ground-truth
+   group, encode the user's clarified rule instead of a "fix."
+2. **Change one thing, scoped.** Copy the current best to `prompt_vN.json` and
+   make a single contained edit aimed at the selected cluster(s). Beware
+   spillover: broad language added for one class/field can shift behavior on
+   others (in extract, several fields share one call; in classify, redefining
+   one label reshapes the boundary with its neighbors).
+3. **Eval on a short combined set, not the full dataset.** Build the round's
+   eval set from: (a) the targeted failure cluster(s) in full, and (b) a small
+   stratified sample of *previously-passing* cases across the other
+   classes/fields (enough to catch spillover cheaply — e.g. ~20–30 per class/
+   field, or all of them if fewer exist). Run the candidate **and** the current
+   best on this same combined set, in the same batch, for a fair comparison.
+   This is what keeps rounds fast on large datasets: you're no longer paying
+   for the whole dataset on every intermediate prompt.
+4. **Check two things, not one.** (a) Did the targeted cluster improve? (b) Did
+   the stratified sample of good cases stay good — i.e. the fix didn't regress
+   cases that were already passing? A cluster win with good-case regression in
+   the control sample is **not** a round win — revert or narrow the edit.
+5. **Log the round immediately** — don't wait for the loop to finish. Update
+   `scaledown-eval/rounds.md` *and* print a short status line as soon as the
+   round's eval completes: version, cluster(s) targeted, the one change, the
+   before/after metric on the targeted cluster, the good-case control result
+   (pass/regressed), and the verdict (win/noise/regress). The user should be
+   able to see progress round-by-round instead of waiting on a single final
+   report — this is what gives visibility into a loop that otherwise looks like
+   a black box.
 
-Stop when the aggregate is at or above the baseline within noise with nothing
-materially regressed, or the user stops.
+Stop when: the clusters the user cares about are fixed with no control-sample
+regression, or the user stops. At that point move to Phase 6 for the one full
+confirmation run.
+
+**Early exit.** As soon as Phase 4's baseline (or any round's result) already
+meets the user's stated success criterion, or is within a reasonable margin of
+it, say so explicitly and offer to stop rather than continuing to iterate by
+default — e.g. "v1 is already +8pp specificity / -2pp recall / -10%
+latency+cost vs baseline; want to keep this as-is, or keep tuning?" Don't run
+further rounds on autopilot once the bar is met.
 
 ---
 
 ## Phase 6 — Report
 
-1. Write `scaledown-eval/optimization-report.md`: task type, endpoint, sample
-   count, schema, baseline characterization, the measured noise floor, a
-   version-by-version table (per-class/per-field + aggregate, best-run and
-   averaged-over-two-runs, winner marked), the recommended prompt and *why* it
-   wins (or why the baseline is already within noise — a valid outcome), and the
-   exact reproduce command:
+1. **Confirm the final candidate for real.** Run the winning prompt from Phase 5
+   **and** v1 over the **full** dataset, **twice each** in one batch — this is
+   the only point in the loop that pays for two full passes, and it's what
+   establishes the noise floor and the real aggregate numbers for the report.
+   Save `metrics_final_a.json` / `_b.json` for both prompts.
+2. Write `scaledown-eval/optimization-report.md`: task type, endpoint, sample
+   count, schema, baseline characterization, the measured noise floor (from this
+   final confirmation run), the round-by-round table from `rounds.md` (cluster
+   targeted, subset metric, control result, verdict), the full-dataset
+   version-by-version comparison (per-class/per-field + aggregate, winner
+   marked), the recommended prompt and *why* it wins (or why the baseline is
+   already within noise — a valid outcome), any user-resolved ambiguous-ground-
+   truth decisions and how they were encoded, and the exact reproduce command:
    `SCALEDOWN_API_KEY=… python scaledown-eval/run_eval.py --prompt <best>.json`.
-2. Print a short spoken summary: which version won, by how much vs v1, whether it
-   clears the noise floor, and anything that got worse.
-3. Leave all artifacts under `scaledown-eval/` for the user to re-run and extend.
+3. Print a short spoken summary: which version won, by how much vs v1 on the
+   full-dataset confirmation, whether it clears the noise floor, and anything
+   that got worse.
+4. Leave all artifacts under `scaledown-eval/` for the user to re-run and extend.
 
 ---
 
@@ -268,13 +363,22 @@ materially regressed, or the user stops.
 - **Never write the API key to disk** — environment only.
 - **Match the metric to the task type and the user's success criterion.** Don't
   force the extract/"balanced accuracy" framing onto classify or summarize.
-- **Never claim a win on a single class/field or a single run.** A win is:
-  aggregate metric up by more than the noise floor, nothing materially regressed,
-  reproduced across two runs.
+- **Never claim a final win on a subset or a single run.** A round win on the
+  targeted cluster + control sample is provisional; the final win is only
+  confirmed by the full-dataset, twice-each comparison in Phase 6.
+- **Never silently pick a cluster to fix.** Present the named clusters (with
+  FP/FN split and the ambiguous-ground-truth group called out separately) and
+  let the user choose priority — they may have cost asymmetries (e.g. FP worse
+  than FN) that aren't visible from the data alone.
+- **Don't re-run the full dataset every round.** Iterate on the targeted
+  cluster(s) plus a small stratified control sample; reserve full-dataset,
+  twice-each runs for the baseline characterization (once) and the final
+  confirmation (once).
 - **Generalize, don't copy the worked example.** Rediscover the baseline's
   conventions for *this* dataset every time.
 - Prefer the user's real data over synthetic; mark synthetic clearly.
-- "Already within noise — no change needed" is a legitimate result.
+- "Already within noise — no change needed" is a legitimate result — offer to
+  stop as soon as it's true, don't iterate by default.
 - Keep generated files under `scaledown-eval/`; don't touch the user's app code
   here (that's the migrate step's job).
 
