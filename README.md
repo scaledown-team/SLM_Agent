@@ -61,6 +61,18 @@ Add to your project's `.cursor/mcp.json` (or `~/.cursor/mcp.json` for global):
 
 Then ask Cursor: *"Use the scaledown-slm-agent tools to evaluate this codebase for ScaleDown integration opportunities."*
 
+#### Using `optimize` in Cursor (Agent Skills)
+
+Cursor natively loads [Agent Skills](https://cursor.com/docs/skills) — the same `SKILL.md` format Claude Code plugins use — from `.agents/skills/`, `.cursor/skills/`, or their `~`-global equivalents. This package ships `optimize` (and `evaluate`) at `.agents/skills/`, so no MCP setup is required for `optimize` specifically:
+
+1. Install the package so its files are on disk somewhere Cursor can see, either:
+   - `npm install @scaledown/migration-agent` in your project (skills land in `node_modules/@scaledown/migration-agent/.agents/skills/` — copy or symlink that `optimize/` folder into your project's own `.agents/skills/optimize/` so Cursor's project-scoped loader picks it up), or
+   - clone [github.com/scaledown-team/SLM_Agent](https://github.com/scaledown-team/SLM_Agent) and copy `.agents/skills/optimize/` into your project's `.agents/skills/` directly.
+2. Restart Cursor (or reload the window) so it re-scans skill directories.
+3. In Cursor's Agent chat, ask it to *"optimize my ScaleDown prompt"* (or similar) — it discovers and runs the `optimize` skill, driving the same phased tuning loop (sample ingestion, error clustering, targeted iteration, final report) as `/slm-agent:optimize` does in Claude Code. It runs with whichever model you've selected in Cursor, not just Claude.
+
+The `evaluate` skill is exposed the same way, but its instructions call the `scaledown-slm-agent` MCP tools above for codebase scanning and report generation, so configure the MCP server too if you want to use `evaluate` in Cursor. `optimize` has no MCP dependency — it only needs shell/file access, which Cursor's agent already has.
+
 ### VS Code (Copilot / any MCP-compatible extension)
 
 Add to your workspace `.vscode/mcp.json`:
