@@ -146,6 +146,12 @@ Opportunity types:
 // ── Tool 3: generate_migration_plan ──────────────────────────────────────────
 
 const findingSchema = z.object({
+  id: z
+    .string()
+    .optional()
+    .describe(
+      "Sequential finding ID (e.g. 'F1', 'F2', ...) assigned by the calling agent. Defaults to a deterministic ID generated from the finding's position in the array if omitted."
+    ),
   file_path: z.string(),
   line_number: z.number().optional(),
   provider: z.string(),
@@ -155,6 +161,12 @@ const findingSchema = z.object({
       confidence: z.enum(["high", "medium", "low"]),
       reason: z.string(),
       estimated_savings: z.string(),
+      status: z
+        .enum(["available", "preview", "coming_soon"])
+        .optional()
+        .describe(
+          "Availability of this ScaleDown SLM. Defaults to 'available' if not specified."
+        ),
     })
   ),
   complexity: z
