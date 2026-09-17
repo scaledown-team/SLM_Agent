@@ -176,9 +176,20 @@ as `llm`. Only add a `sd_compress` step if the call is a needle-in-haystack
 pattern (large retrieved context injected at runtime).
 
 ### Build the findings array
-Construct one `Finding` object per call site:
+Construct one `Finding` object per call site. Assign each finding a sequential
+`id` as you build it — `"F1"` for the first, `"F2"` for the second, and so on
+in the order findings are added to the array. This ID is how the user will
+refer to individual findings later (Phase 6), so it must be present on every
+finding.
+
+For each opportunity, set `status` to reflect real availability: use
+`"preview"` for `sd_summarize` (it is currently in private preview), and
+`"available"` for `sd_classify`, `sd_extract`, and `sd_compress` unless you
+have specific information indicating otherwise.
+
 ```json
 {
+  "id": "F1",
   "file_path": "src/triage.py",
   "line_number": 42,
   "provider": "openai",
@@ -187,7 +198,8 @@ Construct one `Finding` object per call site:
       "type": "classification",
       "confidence": "high",
       "reason": "Prompt asks model to route support tickets into billing/technical/general. Fixed label set, no generation needed.",
-      "estimated_savings": "~95% cost reduction vs. GPT-4o per call"
+      "estimated_savings": "~95% cost reduction vs. GPT-4o per call",
+      "status": "available"
     }
   ],
   "complexity": {
@@ -255,9 +267,22 @@ After showing the plan, ask:
 > "Would you like me to apply these changes?
 > - **yes** — apply all changes
 > - **no** — stop here, report is saved as `scaledown-report.md`
-> - **select** — list each change for individual approval"
+> - **select** — tell me which IDs to apply, e.g. F1, F3"
 
 **Do not edit any files until the user says yes or select.**
+
+Before editing any files, echo back the confirmed ID list and get explicit
+confirmation — do this even after "yes" (in which case the list is every
+finding ID) and especially after "select" (the list the user gave you):
+
+> "Applying F1 and F3. Skipping F2 (preview) and F4. Confirm?"
+
+**If any selected finding has an opportunity with `status` `"preview"` or
+`"coming_soon"`, call that out explicitly in the confirmation message and ask
+again before proceeding with that specific finding** — e.g. "F2 uses
+`sd_summarize`, which is in private preview and requires contacting
+ScaleDown to enable. Apply it anyway?" Do not touch that finding until the
+user separately confirms it.
 
 For each approved finding:
 
